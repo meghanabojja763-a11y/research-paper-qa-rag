@@ -1,7 +1,6 @@
-# app.py
-from evaluation import evaluate_dataset
-from evaluation_dataset import evaluation_dataset
 import streamlit as st
+import numpy as np
+from sentence_transformers import SentenceTransformer
 
 from pdf_processor import (
     extract_pages_from_pdf,
@@ -21,13 +20,25 @@ from rag_pipeline import (
 # ============================================================
 
 st.set_page_config(
-
     page_title="Research Paper QA",
-
     page_icon="📚",
-
     layout="wide"
 )
+
+
+# ============================================================
+# LOAD EMBEDDING MODEL FOR EVALUATION
+# ============================================================
+
+@st.cache_resource
+def load_evaluation_model():
+
+    return SentenceTransformer(
+        "sentence-transformers/all-MiniLM-L6-v2"
+    )
+
+
+evaluation_model = load_evaluation_model()
 
 
 # ============================================================
@@ -52,32 +63,21 @@ st.write(
 # ============================================================
 
 if "vectorstore" not in st.session_state:
-
     st.session_state.vectorstore = None
 
-
 if "chunks" not in st.session_state:
-
     st.session_state.chunks = []
 
-
 if "documents" not in st.session_state:
-
     st.session_state.documents = []
 
-
 if "file_name" not in st.session_state:
-
     st.session_state.file_name = ""
 
-
 if "messages" not in st.session_state:
-
     st.session_state.messages = []
 
-
 if "processed_settings" not in st.session_state:
-
     st.session_state.processed_settings = None
 
 
@@ -94,15 +94,10 @@ with st.sidebar:
     # --------------------------------------------------------
 
     chunk_size = st.slider(
-
         "Chunk Size",
-
         min_value=500,
-
         max_value=2000,
-
-        value=1000,
-
+        value=800,
         step=100
     )
 
@@ -111,15 +106,10 @@ with st.sidebar:
     # --------------------------------------------------------
 
     chunk_overlap = st.slider(
-
         "Chunk Overlap",
-
         min_value=0,
-
         max_value=500,
-
         value=200,
-
         step=50
     )
 
@@ -128,15 +118,10 @@ with st.sidebar:
     # --------------------------------------------------------
 
     retrieval_k = st.slider(
-
         "Retrieval Depth (Top-K)",
-
         min_value=1,
-
         max_value=10,
-
-        value=4,
-
+        value=2,
         step=1
     )
 
@@ -176,9 +161,9 @@ with st.sidebar:
         **Current Configuration**
 
         Chunk Size: {}
-        
+
         Chunk Overlap: {}
-        
+
         Retrieval Depth: {}
         """.format(
             chunk_size,
@@ -197,9 +182,7 @@ st.subheader(
 )
 
 uploaded_file = st.file_uploader(
-
     "Choose a research paper in PDF format",
-
     type=["pdf"]
 )
 
@@ -215,11 +198,8 @@ if uploaded_file is not None:
     )
 
     process_button = st.button(
-
         "⚡ Process Research Paper",
-
         type="primary",
-
         use_container_width=True
     )
 
@@ -274,11 +254,8 @@ if uploaded_file is not None:
                 # ============================================
 
                 chunks = create_chunks(
-
                     documents,
-
                     chunk_size=chunk_size,
-
                     chunk_overlap=chunk_overlap
                 )
 
@@ -302,21 +279,13 @@ if uploaded_file is not None:
                 # STEP 4: Store everything
                 # ============================================
 
-                st.session_state.documents = (
-                    documents
-                )
+                st.session_state.documents = documents
 
-                st.session_state.chunks = (
-                    chunks
-                )
+                st.session_state.chunks = chunks
 
-                st.session_state.vectorstore = (
-                    vectorstore
-                )
+                st.session_state.vectorstore = vectorstore
 
-                st.session_state.file_name = (
-                    uploaded_file.name
-                )
+                st.session_state.file_name = uploaded_file.name
 
                 st.session_state.messages = []
 
@@ -358,9 +327,7 @@ if st.session_state.vectorstore is not None:
 
         st.metric(
             "Pages",
-            len(
-                st.session_state.documents
-            )
+            len(st.session_state.documents)
         )
 
     # --------------------------------------------------------
@@ -371,9 +338,7 @@ if st.session_state.vectorstore is not None:
 
         st.metric(
             "Chunks",
-            len(
-                st.session_state.chunks
-            )
+            len(st.session_state.chunks)
         )
 
     # --------------------------------------------------------
@@ -515,9 +480,7 @@ if st.session_state.vectorstore is not None:
     )
 
     user_question = st.text_input(
-
         "Enter your question:",
-
         placeholder=(
             "Example: What methodology "
             "was used in this paper?"
@@ -525,9 +488,7 @@ if st.session_state.vectorstore is not None:
     )
 
     ask_button = st.button(
-
         "🔎 Ask Question",
-
         type="primary"
     )
 
@@ -547,13 +508,9 @@ if st.session_state.vectorstore is not None:
 # ============================================================
 
 if (
-
     st.session_state.vectorstore is not None
-
     and ask_button
-
     and user_question
-
 ):
 
     try:
@@ -566,15 +523,10 @@ if (
             "🔎 Searching the research paper..."
         ):
 
-            retrieved_documents = (
-                retrieve_documents(
-
-                    st.session_state.vectorstore,
-
-                    user_question,
-
-                    k=retrieval_k
-                )
+            retrieved_documents = retrieve_documents(
+                st.session_state.vectorstore,
+                user_question,
+                k=retrieval_k
             )
 
         if not retrieved_documents:
@@ -595,9 +547,7 @@ if (
         ):
 
             answer = generate_answer(
-
                 user_question,
-
                 retrieved_documents
             )
 
@@ -606,12 +556,9 @@ if (
         # ====================================================
 
         st.session_state.messages.append(
-
             {
                 "question": user_question,
-
                 "answer": answer,
-
                 "documents": retrieved_documents
             }
         )
@@ -697,6 +644,343 @@ if st.session_state.messages:
 
 
 # ============================================================
+# RAG EVALUATION
+# ============================================================
+
+if st.session_state.vectorstore is not None:
+
+    st.divider()
+
+    st.subheader(
+        "📈 RAG System Evaluation"
+    )
+
+    st.write(
+        """
+        Enter questions and their correct answers from the
+        uploaded research paper. The system will compare the
+        generated answers with the reference answers using
+        semantic similarity.
+        """
+    )
+
+    st.info(
+        """
+        **Important:** Use reference answers that are actually
+        supported by the uploaded research paper. The resulting
+        percentage is an evaluation score, not a universal model
+        accuracy.
+        """
+    )
+
+    # --------------------------------------------------------
+    # Number of evaluation questions
+    # --------------------------------------------------------
+
+    number_of_questions = st.number_input(
+        "Number of Evaluation Questions",
+        min_value=1,
+        max_value=10,
+        value=5,
+        step=1
+    )
+
+    evaluation_data = []
+
+    # --------------------------------------------------------
+    # Create question/reference-answer inputs
+    # --------------------------------------------------------
+
+    for i in range(int(number_of_questions)):
+
+        st.markdown(
+            f"### Evaluation Question {i + 1}"
+        )
+
+        question = st.text_input(
+            f"Question {i + 1}",
+            key=f"eval_question_{i}",
+            placeholder=(
+                "Example: What is the main objective "
+                "of this research paper?"
+            )
+        )
+
+        reference_answer = st.text_area(
+            f"Correct Reference Answer {i + 1}",
+            key=f"eval_reference_{i}",
+            placeholder=(
+                "Enter the correct answer according "
+                "to the research paper."
+            )
+        )
+
+        if question.strip() and reference_answer.strip():
+
+            evaluation_data.append(
+                {
+                    "question": question,
+                    "reference_answer": reference_answer
+                }
+            )
+
+    # --------------------------------------------------------
+    # Similarity threshold
+    # --------------------------------------------------------
+
+    similarity_threshold = st.slider(
+        "Semantic Similarity Threshold",
+        min_value=0.50,
+        max_value=0.90,
+        value=0.65,
+        step=0.05
+    )
+
+    st.caption(
+        f"""
+        Answers with semantic similarity ≥
+        {similarity_threshold:.2f} are counted as correct.
+        """
+    )
+
+    # --------------------------------------------------------
+    # Calculate accuracy
+    # --------------------------------------------------------
+
+    evaluate_button = st.button(
+        "📊 Calculate Evaluation",
+        type="primary",
+        use_container_width=True
+    )
+
+    if evaluate_button:
+
+        if len(evaluation_data) == 0:
+
+            st.warning(
+                "Please enter at least one question "
+                "and reference answer."
+            )
+
+        else:
+
+            results = []
+
+            with st.spinner(
+                "Evaluating RAG system..."
+            ):
+
+                for item in evaluation_data:
+
+                    question = item["question"]
+
+                    reference_answer = (
+                        item["reference_answer"]
+                    )
+
+                    try:
+
+                        # ------------------------------------
+                        # Retrieve relevant chunks
+                        # ------------------------------------
+
+                        retrieved_documents = (
+                            retrieve_documents(
+                                st.session_state.vectorstore,
+                                question,
+                                k=retrieval_k
+                            )
+                        )
+
+                        # ------------------------------------
+                        # Generate answer
+                        # ------------------------------------
+
+                        generated_answer = (
+                            generate_answer(
+                                question,
+                                retrieved_documents
+                            )
+                        )
+
+                        # ------------------------------------
+                        # Create embeddings
+                        # ------------------------------------
+
+                        generated_embedding = (
+                            evaluation_model.encode(
+                                generated_answer,
+                                normalize_embeddings=True
+                            )
+                        )
+
+                        reference_embedding = (
+                            evaluation_model.encode(
+                                reference_answer,
+                                normalize_embeddings=True
+                            )
+                        )
+
+                        # ------------------------------------
+                        # Cosine similarity
+                        # ------------------------------------
+
+                        similarity = float(
+                            np.dot(
+                                generated_embedding,
+                                reference_embedding
+                            )
+                        )
+
+                        # Keep score between 0 and 1
+                        similarity = max(
+                            0.0,
+                            min(
+                                1.0,
+                                similarity
+                            )
+                        )
+
+                        is_correct = (
+                            similarity
+                            >= similarity_threshold
+                        )
+
+                        results.append(
+                            {
+                                "question": question,
+                                "generated_answer":
+                                    generated_answer,
+                                "reference_answer":
+                                    reference_answer,
+                                "similarity":
+                                    similarity,
+                                "correct":
+                                    is_correct
+                            }
+                        )
+
+                    except Exception as e:
+
+                        st.error(
+                            f"Error evaluating question: "
+                            f"{question}\n\n{e}"
+                        )
+
+            # ------------------------------------------------
+            # Calculate final metrics
+            # ------------------------------------------------
+
+            if results:
+
+                total_questions = len(results)
+
+                correct_answers = sum(
+                    result["correct"]
+                    for result in results
+                )
+
+                answer_accuracy = (
+                    correct_answers
+                    / total_questions
+                ) * 100
+
+                average_similarity = (
+                    sum(
+                        result["similarity"]
+                        for result in results
+                    )
+                    / total_questions
+                )
+
+                # ------------------------------------------------
+                # Display metrics
+                # ------------------------------------------------
+
+                st.success(
+                    "✅ Evaluation completed successfully!"
+                )
+
+                col1, col2, col3 = st.columns(3)
+
+                with col1:
+
+                    st.metric(
+                        "Evaluation Accuracy",
+                        f"{answer_accuracy:.2f}%"
+                    )
+
+                with col2:
+
+                    st.metric(
+                        "Average Similarity",
+                        f"{average_similarity:.2f}"
+                    )
+
+                with col3:
+
+                    st.metric(
+                        "Questions Evaluated",
+                        total_questions
+                    )
+
+                # ------------------------------------------------
+                # Question-wise results
+                # ------------------------------------------------
+
+                st.subheader(
+                    "📋 Question-wise Results"
+                )
+
+                for index, result in enumerate(
+                    results
+                ):
+
+                    st.markdown(
+                        f"### Question {index + 1}"
+                    )
+
+                    st.write(
+                        result["question"]
+                    )
+
+                    st.write(
+                        "**Generated Answer:**"
+                    )
+
+                    st.write(
+                        result["generated_answer"]
+                    )
+
+                    st.write(
+                        "**Reference Answer:**"
+                    )
+
+                    st.write(
+                        result["reference_answer"]
+                    )
+
+                    st.metric(
+                        "Semantic Similarity",
+                        f"{result['similarity']:.2f}"
+                    )
+
+                    if result["correct"]:
+
+                        st.success(
+                            "✅ Meets similarity threshold"
+                        )
+
+                    else:
+
+                        st.warning(
+                            "⚠️ Below similarity threshold"
+                        )
+
+                    st.divider()
+
+
+# ============================================================
 # VIEW RETRIEVED CONTEXT
 # ============================================================
 
@@ -711,7 +995,6 @@ if st.session_state.messages:
         )
 
         for index, document in enumerate(
-
             latest_message["documents"]
         ):
 
@@ -796,5 +1079,10 @@ with st.expander(
 
         The application displays the PDF page
         numbers and chunk IDs used for retrieval.
+
+        **10. Evaluation**
+
+        Generated answers can be compared with
+        reference answers using semantic similarity.
         """
     )
